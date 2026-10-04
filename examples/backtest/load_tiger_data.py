@@ -37,7 +37,7 @@ def load_market_data(asset, start, end):
 
 if __name__ == "__main__":
     data = load_market_data(
-        "BTC",
+        "SOL",
         "2025-01-01T00:00:00Z",
         "2026-01-01T00:00:00Z",
     )

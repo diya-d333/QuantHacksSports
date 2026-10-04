@@ -10,6 +10,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "plotly>=5.20.0",
     "pandas>=2.0.0",
+    "psycopg[binary]>=3.3.6",
+    "databento>=0.87.0",
 ]
 
 [build-system]
