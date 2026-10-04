@@ -1,4 +1,5 @@
 import backtrader as bt
+import math
 
 
 class BehavioralMeanReversionStrategy(bt.Strategy):
@@ -15,10 +16,13 @@ class BehavioralMeanReversionStrategy(bt.Strategy):
         ("market_crash_threshold", -0.02),
 
         # Sentiment is tracked, but is not required for entry
-        ("sentiment_threshold", 40),
+        ("sentiment_threshold", 25),
     )
 
     def __init__(self):
+
+        self.drop_range_counts = {"BTC": 0, "ETH": 0}
+        self.drop_range_fear_counts = {"BTC": 0, "ETH": 0}
 
         # ------------------------------------------
         # Data feeds
@@ -62,76 +66,29 @@ class BehavioralMeanReversionStrategy(bt.Strategy):
         # ------------------------------------------
         # 4-hour returns
         # ------------------------------------------
+        # Features calculated on each asset's full timeline.
 
-        self.btc_return = bt.indicators.PercentChange(
-            self.btc.close,
-            period=1,
-        )
+        self.btc_return = self.btc.return_4h
+        self.eth_return = self.eth.return_4h
+        self.xrp_return = self.xrp.return_4h
+        self.sol_return = self.sol.return_4h
 
-        self.eth_return = bt.indicators.PercentChange(
-            self.eth.close,
-            period=1,
-        )
-
-        self.xrp_return = bt.indicators.PercentChange(
-            self.xrp.close,
-            period=1,
-        )
-
-        self.sol_return = bt.indicators.PercentChange(
-            self.sol.close,
-            period=1,
-        )
-
-        # ------------------------------------------
-        # Recent volatility
-        # ------------------------------------------
-
-        self.btc_volatility = bt.indicators.StandardDeviation(
-            self.btc_return,
-            period=self.p.lookback,
-        )
-
-        self.eth_volatility = bt.indicators.StandardDeviation(
-            self.eth_return,
-            period=self.p.lookback,
-        )
+        self.btc_large_drop = self.btc.large_drop
+        self.eth_large_drop = self.eth.large_drop
 
         # ------------------------------------------
         # Large-drop conditions
         # ------------------------------------------
 
-        self.btc_large_drop = (
-            self.btc_return
-            < -self.p.drop_threshold * self.btc_volatility
-        )
-
-        self.eth_large_drop = (
-            self.eth_return
-            < -self.p.drop_threshold * self.eth_volatility
-        )
 
         # ------------------------------------------
         # ADX regime detection
         # ------------------------------------------
 
-        self.btc_adx = bt.indicators.AverageDirectionalMovementIndex(
-            self.btc,
-            period=self.p.adx_period,
-        )
 
-        self.eth_adx = bt.indicators.AverageDirectionalMovementIndex(
-            self.eth,
-            period=self.p.adx_period,
-        )
 
-        self.btc_range_bound = (
-            self.btc_adx < self.p.adx_threshold
-        )
-
-        self.eth_range_bound = (
-            self.eth_adx < self.p.adx_threshold
-        )
+        self.btc_range_bound = self.btc.snowflake_range
+        self.eth_range_bound = self.eth.snowflake_range
 
         # ------------------------------------------
         # XRP + SOL broad-market confirmation
@@ -174,7 +131,7 @@ class BehavioralMeanReversionStrategy(bt.Strategy):
             if order.data is self.btc:
 
                 if order.isbuy():
-                    self.btc_entry_bar = len(self)
+                    self.btc_entry_bar = order.executed.dt
 
                 elif order.issell():
                     self.btc_entry_bar = None
@@ -185,7 +142,7 @@ class BehavioralMeanReversionStrategy(bt.Strategy):
             elif order.data is self.eth:
 
                 if order.isbuy():
-                    self.eth_entry_bar = len(self)
+                    self.eth_entry_bar = order.executed.dt
 
                 elif order.issell():
                     self.eth_entry_bar = None
@@ -216,13 +173,19 @@ class BehavioralMeanReversionStrategy(bt.Strategy):
         # Current conditions
         # ------------------------------------------
 
+        confirmation_ready = (
+            math.isfinite(self.xrp_return[0])
+            and math.isfinite(self.sol_return[0])
+        )
+
         no_broad_crash = (
-            not self.broad_market_crash[0]
+            confirmation_ready
+            and self.market_return[0] >= self.p.market_crash_threshold
         )
 
         fearful_sentiment = (
             self.sentiment[0]
-            < self.p.sentiment_threshold
+            <= self.p.sentiment_threshold
         )
 
         # ------------------------------------------
@@ -247,6 +210,25 @@ class BehavioralMeanReversionStrategy(bt.Strategy):
         if fearful_sentiment:
             self.fearful_sentiment_count += 1
 
+        for asset, drop, range_flag in [
+            ("BTC", self.btc_large_drop[0], self.btc_range_bound[0]),
+            ("ETH", self.eth_large_drop[0], self.eth_range_bound[0]),
+        ]:
+            if drop and range_flag:
+                self.drop_range_counts[asset] += 1
+                if fearful_sentiment:
+                    self.drop_range_fear_counts[asset] += 1
+
+                    print(
+                        f"{asset} candidate | "
+                        f"bar_start={self.btc.datetime.datetime(0)} | "
+                        f"fear={self.sentiment[0]:.1f} | "
+                        f"XRP_return={self.xrp_return[0]:.4%} | "
+                        f"SOL_return={self.sol_return[0]:.4%} | "
+                        f"confirmation_ready={confirmation_ready} | "
+                        f"no_broad_crash={no_broad_crash}"
+                    )
+
         # ------------------------------------------
         # Signals
         # ------------------------------------------
@@ -255,12 +237,14 @@ class BehavioralMeanReversionStrategy(bt.Strategy):
             self.btc_large_drop[0]
             and self.btc_range_bound[0]
             and no_broad_crash
+            and fearful_sentiment
         )
 
         eth_signal = (
             self.eth_large_drop[0]
             and self.eth_range_bound[0]
             and no_broad_crash
+            and fearful_sentiment
         )
 
         if btc_signal:
@@ -279,7 +263,10 @@ class BehavioralMeanReversionStrategy(bt.Strategy):
         if (
             self.getposition(self.btc).size > 0
             and self.btc_entry_bar is not None
-            and len(self) > self.btc_entry_bar
+            and (
+                self.btc.datetime[0] + 4.0 / 24.0
+                >= self.btc_entry_bar + 4.0 / 24.0
+            )
             and self.btc_order is None
         ):
             self.btc_order = self.close(
@@ -293,7 +280,10 @@ class BehavioralMeanReversionStrategy(bt.Strategy):
         if (
             self.getposition(self.eth).size > 0
             and self.eth_entry_bar is not None
-            and len(self) > self.eth_entry_bar
+            and (
+                self.eth.datetime[0] + 4.0 / 24.0
+                >= self.eth_entry_bar + 4.0 / 24.0
+            )
             and self.eth_order is None
         ):
             self.eth_order = self.close(
@@ -328,6 +318,9 @@ class BehavioralMeanReversionStrategy(bt.Strategy):
 
     def stop(self):
 
+        print("Drop + Snowflake range:", self.drop_range_counts)
+        print("Drop + range + fear:", self.drop_range_fear_counts)
+
         print()
         print("========== SIGNAL DIAGNOSTICS ==========")
         print(f"Bars checked:             {self.total_bars_checked}")
@@ -351,8 +344,9 @@ class BehavioralMeanReversionStrategy(bt.Strategy):
 
         print()
         print(
-            "NOTE: Sentiment is measured but is not "
-            "currently required for entry."
+            "Entry requires Fear & Greed <= 25, "
+            "a large drop, a Snowflake range label, "
+            "and average XRP/SOL return >= -2%."
         )
 
         print("========================================")

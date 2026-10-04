@@ -91,3 +91,33 @@ Training uses only 2021–2024. A separate inference step will load
 these saved models for the final 2026 test without retraining.
 
 The exports still need to be connected to the backtest.
+
+## Integrated 2025 mean-reversion validation
+
+Run: python examples/backtest/tiger_backtest.py
+
+Entries require:
+- A large BTC or ETH drop.
+- A Snowflake RANGE_CANDIDATE label.
+- Fear & Greed <= 25.
+- Average XRP/SOL four-hour return >= -2%.
+- Valid entry timing and available confirmation data.
+
+The shared dataset contains 964 bars from May 18 through
+December 31, 2025. It does not cover the full year.
+
+Result: zero trades. XRP/SOL confirmation blocked all three
+candidates that passed the drop, range, and sentiment conditions.
+This provides no evidence of trading profitability.
+
+Synthetic checks passed for next-open entry, a four-hour exit
+on continuous bars, and a delayed exit across a trading gap.
+Sizing and transaction costs have not yet been tested with fills.
+
+Sentiment uses the previously configured 24-hour availability-delay
+assumption; the database view was not reverified in this review.
+
+Saved report:
+backtest_results/mean_reversion_2025_validation.txt
+
+2026 remains reserved for the final out-of-sample test.
