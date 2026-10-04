@@ -1,0 +1,3 @@
+# Requires Python 3.11 or newer.
+# run.py uses only Python's standard library.
+# No third-party packages are required for the results report.
