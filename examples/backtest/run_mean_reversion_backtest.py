@@ -24,6 +24,25 @@ COST_CASES = {
     "ILLUSTRATIVE_COST": (0.0005, 0.0002),
 }
 
+class EquityRecorder(bt.Analyzer):
+    def start(self):
+        self.rows = []
+
+    def next(self):
+        # Source timestamps mark the bar start.
+        bar_end = (
+            self.strategy.data.datetime.datetime(0)
+            + timedelta(hours=4)
+        )
+
+        self.rows.append({
+            "TIME_UTC": bar_end,
+            "EQUITY": self.strategy.broker.getvalue(),
+            "CASH": self.strategy.broker.getcash(),
+        })
+
+    def get_analysis(self):
+        return self.rows
 
 class SignalFeed(bt.feeds.PandasData):
     lines = ("entry_signal",)
@@ -179,6 +198,56 @@ def load_frame(asset, signal_column):
     frame.index = frame.index.tz_convert("UTC").tz_localize(None)
     return frame
 
+def calculate_daily_metrics(equity):
+    frame = equity.copy()
+    frame["TIME_UTC"] = pd.to_datetime(
+        frame["TIME_UTC"], utc=True
+    )
+
+    values = frame.set_index("TIME_UTC")["EQUITY"].sort_index()
+
+    # Starting portfolio value before the 2025 evaluation period.
+    baseline = pd.Series(
+        [STARTING_CASH],
+        index=pd.DatetimeIndex(["2025-01-01"], tz="UTC"),
+    )
+
+    values = pd.concat([baseline, values])
+
+    # Midnight belongs to the day that just ended.
+    # Carry the last recorded valuation through days without bars.
+    daily_equity = values.resample(
+        "1D", closed="right", label="right"
+    ).last().ffill()
+
+    daily_returns = daily_equity.pct_change(
+        fill_method=None
+    ).dropna()
+
+    daily_std = daily_returns.std(ddof=1)
+
+    metrics = {
+        "ANNUALIZED_RETURN_PCT": 100 * (
+            (daily_equity.iloc[-1] / STARTING_CASH)
+            ** (365 / len(daily_returns)) - 1
+        ),
+        "ANNUALIZED_VOLATILITY_PCT": (
+            100 * daily_std * 365 ** 0.5
+        ),
+        # Assumes zero risk-free rate and no interest on cash.
+        "SHARPE_RATIO_RF_ZERO": (
+            daily_returns.mean() / daily_std * 365 ** 0.5
+            if daily_std > 0 else None
+        ),
+    }
+
+    daily = daily_equity.rename("EQUITY").to_frame()
+    daily["DAILY_RETURN"] = daily_equity.pct_change(
+        fill_method=None
+    )
+    daily.index.name = "DAY_END_UTC"
+
+    return daily, metrics
 
 def run_case(asset, variant, signal_column, cost_case, fee, slip):
     frame = load_frame(asset, signal_column)
@@ -223,10 +292,24 @@ def run_case(asset, variant, signal_column, cost_case, fee, slip):
         _name="drawdown",
     )
 
+    cerebro.addanalyzer(
+        EquityRecorder,
+        _name="equity",
+    )
+
     strategy = cerebro.run(runonce=False)[0]
     trades = pd.DataFrame(strategy.closed_trades)
 
     prefix = f"{asset}_{variant}_{cost_case}"
+
+    equity = pd.DataFrame(
+        strategy.analyzers.equity.get_analysis()
+    )
+
+    equity.to_csv(
+        OUTPUT_DIR / f"{prefix}_equity.csv",
+        index=False,
+    )
 
     if not trades.empty:
         trades.to_csv(
