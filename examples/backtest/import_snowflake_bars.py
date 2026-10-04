@@ -27,8 +27,7 @@ def main():
                 WHERE asset IN ('BTC', 'ETH')
                   AND dataset = 'GLBX.MDP3'
                   AND time >= TIMESTAMPTZ '2021-01-01 00:00:00+00'
-                  AND time < TIMESTAMPTZ '2026-01-01 00:00:00+00'
-                ORDER BY asset, time
+                  AND time < TIMESTAMPTZ '2026-10-01 00:00:00+00'                ORDER BY asset, time
             """)
             rows = cursor.fetchall()
 

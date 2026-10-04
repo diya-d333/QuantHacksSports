@@ -34,9 +34,7 @@ START_DATE = "2026-01-01"
 
 # Download through the latest available date.
 # We cannot request future data.
-END_DATE = pd.Timestamp.now(
-    tz="UTC"
-).strftime("%Y-%m-%d")
+END_DATE = "2026-10-01"
 
 
 # ============================================================

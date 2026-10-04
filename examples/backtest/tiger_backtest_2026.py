@@ -61,10 +61,10 @@ class TigerPandasData(bt.feeds.PandasData):
 # IMPORTANT: We are NOT using 2026 OOS data
 # --------------------------------------------------
 
-START_DATE = "2025-01-01T00:00:00Z"
-END_DATE = "2026-01-01T00:00:00Z"
+START_DATE = "2025-10-01T00:00:00Z"
+END_DATE = "2026-10-01T00:00:00Z"
 
-print("Loading 2025 development data...")
+print("Loading historical warm-up and 2026 out-of-sample data...")
 
 btc = load_market_data("BTC", START_DATE, END_DATE)
 eth = load_market_data("ETH", START_DATE, END_DATE)
@@ -130,7 +130,7 @@ sol = prepare_market_features(sol)
 prediction_file = (
     PROJECT_ROOT
     / "regime_model_output"
-    / "regime_predictions_adx_4h.csv"
+    / "regime_predictions_adx_2026_4h.csv"
 )
 
 predictions = pd.read_csv(prediction_file)
@@ -138,7 +138,7 @@ predictions.columns = predictions.columns.str.strip().str.upper()
 
 predictions["TIME"] = pd.to_datetime(predictions["TIME"], utc=True)
 predictions = predictions.loc[
-    predictions["DATASET_ROLE"].eq("REGIME_VALIDATION")
+    predictions["DATASET_ROLE"].eq("REGIME_OOS")
 ].copy()
 
 if predictions.duplicated(["ASSET", "TIME"]).any():
@@ -187,6 +187,17 @@ for confirmation_frame in [xrp, sol]:
 
 # Trading timeline: timestamps available for both BTC and ETH.
 common_times = btc.index.intersection(eth.index).sort_values()
+
+# Keep candles whose closing/signal time falls in the OOS period.
+oos_start = pd.Timestamp("2026-01-01T00:00:00Z")
+oos_end = pd.Timestamp("2026-10-01T00:00:00Z")
+
+bar_end_times = common_times + pd.Timedelta(hours=4)
+
+common_times = common_times[
+    (bar_end_times >= oos_start)
+    & (bar_end_times < oos_end)
+]
 
 if common_times.empty:
     raise ValueError("No shared BTC/ETH timestamps.")
@@ -477,7 +488,7 @@ output_dir.mkdir(parents=True, exist_ok=True)
 
 equity = pd.DataFrame(strategy.analyzers.equity.get_analysis())
 equity.to_csv(
-    output_dir / "mean_reversion_2025_equity.csv",
+    output_dir / "mean_reversion_2026_oos_equity.csv",
     index=False,
 )
 
@@ -498,20 +509,19 @@ ax.plot(
 )
 
 ax.set_title(
-    "2025 Development Equity Curve — January–December\n"
-    "Fear & Greed required; XRP/SOL informational"
+    "2026 Out-of-Sample Equity Curve — January–September\n"
+    "Fear & Greed <= 25 required; XRP/SOL confirmation disabled"
 )
 ax.set_xlabel("Date (UTC)")
 ax.set_ylabel("Portfolio value (USD)")
 ax.yaxis.set_major_formatter(ticker.StrMethodFormatter("${x:,.0f}"))
-ax.set_ylim(99000, 101000)
 ax.grid(alpha=0.3)
 ax.legend()
 
 fig.autofmt_xdate()
 fig.tight_layout()
 
-chart_file = output_dir / "mean_reversion_2025_equity.png"
+chart_file = output_dir / "mean_reversion_2026_oos_equity.png"
 fig.savefig(chart_file, dpi=200)
 plt.close(fig)
 
@@ -521,7 +531,27 @@ trade_log = pd.DataFrame(
     strategy.analyzers.trade_log.get_analysis()
 )
 
-trade_file = output_dir / "mean_reversion_2025_trades.csv"
+trade_file = output_dir / "mean_reversion_2026_oos_trades.csv"
 trade_log.to_csv(trade_file, index=False)
 
 print(f"Saved trade log: {trade_file}")
+
+daily_equity = (
+    equity.set_index("time_utc")["portfolio_value"]
+    .sort_index()
+    .resample("1D")
+    .last()
+    .ffill()
+)
+
+daily_returns = daily_equity.pct_change(fill_method=None).dropna()
+daily_std = daily_returns.std(ddof=1)
+
+sharpe = (
+    (365 ** 0.5) * daily_returns.mean() / daily_std
+    if pd.notna(daily_std) and daily_std > 0
+    else float("nan")
+)
+
+print(f"Annualized daily Sharpe: {sharpe:.3f}")
+print("Zero risk-free rate; missing calendar days carry forward equity.")

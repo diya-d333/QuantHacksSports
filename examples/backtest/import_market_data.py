@@ -18,6 +18,8 @@ files = [
     ("ETH", "ETH_4h_2025.parquet"),
     ("SOL", "SOL_4h.parquet"),
     ("XRP", "XRP_4h.parquet"),
+    ("BTC", "BTC_4h_2026.parquet"),
+    ("ETH", "ETH_4h_2026.parquet"),
 ]
 
 # Check all files exist before inserting anything.
